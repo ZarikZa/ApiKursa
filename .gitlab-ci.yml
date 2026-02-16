@@ -91,6 +91,7 @@ check-env-files:
     - pip install -r requirements.txt
 
   script:
+    - source $VENV_PATH/bin/activate
     - echo "Проверка .env файлов..."
     - test -f ".env" 
     - echo ".env файлы проверены"
