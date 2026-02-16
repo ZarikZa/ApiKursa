@@ -1,0 +1,70 @@
+name: DjangoApi check
+
+on:
+  push:
+    branches: [ master] #через запятую перчисление 
+  #pull_request:
+
+jobs:
+  validate:
+    name: validate Django Project
+    runs-on: uduntu-latest #раннер виртуалки 
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6 #переключение на ветку с проектом
+
+      - name: set up python
+        uses: actions/setup-python@v6
+        with: 
+          python-version: '3.13'
+
+      - name: create venv and install libs 
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: check django settings
+        run: |
+          source .venv/bin/activate
+          echo "Проверка настроек Django..."
+          python3 manage.py check
+          echo "Настройки валидны"
+          echo "Конец"
+
+      - name: check django settings
+        run: |
+          source $VENV_PATH/bin/activate
+          echo "Проверка миграций Django..."
+          python3 manage.py makemigrations --check --dry-run
+          echo "Миграции валидны"
+          echo "Конец"
+
+  test:
+    name: validate Django Project
+    runs-on: uduntu-latest #раннер виртуалки 
+    needs: validate
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6 #переключение на ветку с проектом
+
+      - name: set up python
+        uses: actions/setup-python@v6
+        with: 
+          python-version: '3.13'
+
+      - name: create venv and install libs 
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: check Django static files
+        run: |
+          source $VENV_PATH/bin/activate
+          echo "Проверка статик-файлов Django..."
+          python3 manage.py collect static --noinput --dry-run
+          echo "Статические файлы валидны"
+          echo "Конец"
