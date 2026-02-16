@@ -82,30 +82,30 @@ jobs:
       #     python3 manage.py collectstatic --noinput --dry-run
       #     echo "Статик-файлы валидны"
 
-lint:
-  name: Test Django lint
-  runs-on: ubuntu-latest
-  needs: validate
-  steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+  lint:
+    name: Test Django lint
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+        - name: Checkout repository
+          uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-      
-      - name: Create venv and install libs
-        run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      - name: Check lint
-        run: |
-          source .venv/bin/activate
-          echo "Проверка синтаксиса Django..."
-          ruff check .
-          echo "Ситаксис валиден"
-          echo "Конец"
+        - name: Set up Python
+          uses: actions/setup-python@v6
+          with:
+            python-version: '3.13'
+        
+        - name: Create venv and install libs
+          run: |
+            python3 -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+        
+        - name: Check lint
+          run: |
+            source .venv/bin/activate
+            echo "Проверка синтаксиса Django..."
+            ruff check .
+            echo "Ситаксис валиден"
+            echo "Конец"
