@@ -77,3 +77,7 @@ class VacancyVideoLikeAdmin(admin.ModelAdmin):
 @admin.register(Skill)
 class SkillAdmin(admin.ModelAdmin):
     pass
+
+@admin.register(Message)
+class MessegeAdmin(admin.ModelAdmin):
+    pass

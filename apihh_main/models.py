@@ -83,6 +83,7 @@ class Applicant(models.Model):
     last_name = models.CharField(max_length=80)
     birth_date = models.DateField()
     resume = models.TextField(blank=True)
+    avatar = models.ImageField(upload_to='applicant_avatars/%Y/%m/%d/', blank=True, null=True)
     theme = models.CharField(max_length=100, blank=True, null=True) 
 
     class Meta:
@@ -213,6 +214,9 @@ class Vacancy(models.Model):
         ('HR', 'HR'),
     ], default='IT') 
     work_conditions_details = models.TextField(blank=True, null=True) 
+
+    # Для архивации вакансий компанией (не показываем в публичной выдаче)
+    is_archived = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'vacancies'
@@ -535,3 +539,35 @@ class VacancyVideoLike(models.Model):
     class Meta:
         db_table = 'vacancy_video_likes'
         unique_together = ('applicant', 'video')
+
+
+import secrets
+
+from django.conf import settings
+from datetime import timedelta
+
+class PasswordResetCode(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="password_reset_codes")
+    code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "password_reset_codes"
+        indexes = [
+            models.Index(fields=["user", "code"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    @staticmethod
+    def generate_code() -> str:
+        # 6 цифр
+        return f"{secrets.randbelow(1000000):06d}"
+
+    @staticmethod
+    def default_expires_at():
+        return timezone.now() + timedelta(minutes=10)

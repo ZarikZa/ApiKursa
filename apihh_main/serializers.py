@@ -42,11 +42,18 @@ class CompanyStatusSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         instance.status = validated_data.get('status', instance.status)
         instance.save()
-        
-        # Логируем действие
+
+        # Логируем действие (action — FK на ActionType)
+        code = 'company_approved' if instance.status == Company.STATUS_APPROVED else 'company_rejected'
+        name = 'Одобрение компании' if code == 'company_approved' else 'Отклонение компании'
+        action_type, _ = ActionType.objects.get_or_create(
+            code=code,
+            defaults={"name": name, "description": ""},
+        )
+
         AdminLog.objects.create(
             admin=self.context['request'].user,
-            action='company_approved' if instance.status == Company.STATUS_APPROVED else 'company_rejected',
+            action=action_type,
             target_company=instance,
             details=f"Статус изменен на {instance.get_status_display()}"
         )
@@ -117,6 +124,8 @@ class VacancyListSerializer(serializers.ModelSerializer):
     has_video = serializers.SerializerMethodField()
     video_id = serializers.SerializerMethodField()
 
+    has_applied = serializers.SerializerMethodField()  # ✅
+
     class Meta:
         model = Vacancy
         fields = (
@@ -125,7 +134,9 @@ class VacancyListSerializer(serializers.ModelSerializer):
             'city', 'category', 'experience',
             'work_conditions_name', 'status_name',
             'views', 'created_date',
+            'is_archived',
             'has_video', 'video_id',
+            'has_applied',  # ✅
         )
 
     def get_has_video(self, obj):
@@ -134,6 +145,18 @@ class VacancyListSerializer(serializers.ModelSerializer):
     def get_video_id(self, obj):
         v = obj.videos.order_by('-created_at').first()
         return v.id if v else None
+
+    def get_has_applied(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+
+        # ---- Р’РђР РРђРќРў 1: РµСЃР»Рё Response.applicants = FK РЅР° Applicant ----
+        return Response.objects.filter(vacancy=obj, applicants__user=request.user).exists()
+
+        # ---- Р’РђР РРђРќРў 2: РµСЃР»Рё Response.applicants = FK РЅР° User ----
+        # return Response.objects.filter(vacancy=obj, applicants=request.user).exists()
+
 
 
 class VacancyDetailSerializer(serializers.ModelSerializer):
@@ -167,6 +190,16 @@ class VacancyDetailSerializer(serializers.ModelSerializer):
                 return False
         return False
 
+
+class CompanyVacancySerializer(VacancyDetailSerializer):
+    """
+    Serializer for company cabinet vacancy CRUD.
+    Company is set from authenticated user in viewset.perform_create().
+    """
+
+    class Meta(VacancyDetailSerializer.Meta):
+        read_only_fields = ('company', 'created_date', 'views', 'is_archived')
+
 class ComplaintSerializer(serializers.ModelSerializer):
     complainant_email = serializers.CharField(source='complainant.email', read_only=True)
     vacancy_position = serializers.CharField(source='vacancy.position', read_only=True)
@@ -176,6 +209,19 @@ class ComplaintSerializer(serializers.ModelSerializer):
         model = Complaint
         fields = '__all__'
         read_only_fields = ('complainant', 'created_at', 'resolved_at', 'status')
+
+
+class AdminComplaintSerializer(serializers.ModelSerializer):
+    """Админ сайта может менять статус и admin_notes."""
+
+    complainant_email = serializers.CharField(source='complainant.email', read_only=True)
+    vacancy_position = serializers.CharField(source='vacancy.position', read_only=True)
+    company_name = serializers.CharField(source='vacancy.company.name', read_only=True)
+
+    class Meta:
+        model = Complaint
+        fields = '__all__'
+        read_only_fields = ('complainant', 'created_at', 'resolved_at')
 
 # serializers.py
 from rest_framework import serializers
@@ -329,7 +375,7 @@ class ApplicantRegistrationSerializer(BaseUserRegistrationSerializer):
         )
     
     def create(self, validated_data):
-        # Извлекаем данные для Applicant
+        # РР·РІР»РµРєР°РµРј РґР°РЅРЅС‹Рµ РґР»СЏ Applicant
         applicant_data = {
             'first_name': validated_data.pop('first_name'),
             'last_name': validated_data.pop('last_name'),
@@ -363,7 +409,7 @@ class CompanyRegistrationSerializer(BaseUserRegistrationSerializer):
         )
     
     def create(self, validated_data):
-        # Извлекаем данные для Company
+        # РР·РІР»РµРєР°РµРј РґР°РЅРЅС‹Рµ РґР»СЏ Company
         company_data = {
             'name': validated_data.pop('name'),
             'number': validated_data.pop('number'),
@@ -409,7 +455,7 @@ class EmployeeRegistrationSerializer(BaseUserRegistrationSerializer):
         return attrs
     
     def create(self, validated_data):
-        # Извлекаем данные для Employee
+        # РР·РІР»РµРєР°РµРј РґР°РЅРЅС‹Рµ РґР»СЏ Employee
         first_name = validated_data.pop('first_name')
         last_name = validated_data.pop('last_name')
         role = validated_data.pop('role')
@@ -431,7 +477,7 @@ class EmployeeRegistrationSerializer(BaseUserRegistrationSerializer):
 
         # Создаем Employee
         employee = Employee.objects.create(user=user, company=company, role=role)
-        # Дублируем ФИО в User (удобно для админки/чата)
+        # Р”СѓР±Р»РёСЂСѓРµРј Р¤РРћ РІ User (СѓРґРѕР±РЅРѕ РґР»СЏ Р°РґРјРёРЅРєРё/С‡Р°С‚Р°)
         user.first_name = first_name
         user.last_name = last_name
         user.save(update_fields=['first_name', 'last_name'])
@@ -452,11 +498,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
     # Поля из User
     id = serializers.IntegerField(read_only=True)
     username = serializers.CharField(read_only=True)
-    email = serializers.EmailField(read_only=True)
+    email = serializers.EmailField(required=False)
     user_type = serializers.CharField(read_only=True)
     user_type_display = serializers.CharField(source='get_user_type_display', read_only=True)
     employee_role = serializers.SerializerMethodField(read_only=True)
     company_id = serializers.SerializerMethodField(read_only=True)
+    company_name = serializers.SerializerMethodField(read_only=True)
+    company_number = serializers.SerializerMethodField(read_only=True)
+    company_industry = serializers.SerializerMethodField(read_only=True)
+    company_description = serializers.SerializerMethodField(read_only=True)
 
     # Поля, которые можно редактировать
     first_name = serializers.CharField(required=False, allow_blank=True)
@@ -467,6 +517,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     applicant_id = serializers.SerializerMethodField(read_only=True)
     birth_date = serializers.DateField(source='applicant.birth_date', required=False, allow_null=True)
     resume = serializers.CharField(source='applicant.resume', required=False, allow_blank=True, allow_null=True)
+    avatar = serializers.ImageField(source='applicant.avatar', required=False, allow_null=True)
     # theme = serializers.CharField(source='applicant.theme', required=False, allow_blank=True)  # если есть
 
     class Meta:
@@ -474,10 +525,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'email', 'phone', 'user_type', 'user_type_display',
             'first_name', 'last_name',
-            'applicant_id', 'birth_date', 'resume',
+            'applicant_id', 'birth_date', 'resume', 'avatar',
             'employee_role', 'company_id',
+            'company_name', 'company_number', 'company_industry', 'company_description',
         ]
-        read_only_fields = ('id', 'username', 'email', 'user_type', 'user_type_display', 'applicant_id')
+        read_only_fields = ('id', 'username', 'user_type', 'user_type_display', 'applicant_id')
 
     def get_applicant_id(self, obj):
         try:
@@ -498,33 +550,82 @@ class UserProfileSerializer(serializers.ModelSerializer):
         except Employee.DoesNotExist:
             return None
 
+    def get_company_name(self, obj):
+        try:
+            company = obj.employee.company
+            return company.name if company else None
+        except Employee.DoesNotExist:
+            return None
+
+    def get_company_number(self, obj):
+        try:
+            company = obj.employee.company
+            return company.number if company else None
+        except Employee.DoesNotExist:
+            return None
+
+    def get_company_industry(self, obj):
+        try:
+            company = obj.employee.company
+            return company.industry if company else None
+        except Employee.DoesNotExist:
+            return None
+
+    def get_company_description(self, obj):
+        try:
+            company = obj.employee.company
+            return company.description if company else None
+        except Employee.DoesNotExist:
+            return None
+
 
     def update(self, instance, validated_data):
-        # Обновляем поля User
+        applicant_data = validated_data.pop('applicant', {})
+
+        # Update User fields
+        if 'email' in validated_data:
+            instance.email = validated_data.get('email')
         instance.first_name = validated_data.get('first_name', instance.first_name)
         instance.last_name = validated_data.get('last_name', instance.last_name)
         instance.phone = validated_data.get('phone', instance.phone)
         instance.save()
 
-        # Обновляем Applicant, если данные пришли и пользователь — соискатель
-        if instance.user_type == 'applicant':
-            applicant_data = {}
-            if 'birth_date' in validated_data:
-                applicant_data['birth_date'] = validated_data.pop('birth_date')
-            if 'resume' in validated_data:
-                applicant_data['resume'] = validated_data.pop('resume')
-
-            if applicant_data:
-                try:
-                    applicant = instance.applicant
-                    for attr, value in applicant_data.items():
-                        setattr(applicant, attr, value)
-                    applicant.save()
-                except Applicant.DoesNotExist:
-                    # Если аппликанта нет — можно создать (но обычно он создаётся при регистрации)
-                    Applicant.objects.create(user=instance, **applicant_data)
+        # Update linked Applicant fields (birth_date, resume, avatar)
+        if instance.user_type == 'applicant' and applicant_data:
+            try:
+                applicant = instance.applicant
+                for attr, value in applicant_data.items():
+                    setattr(applicant, attr, value)
+                applicant.save()
+            except Applicant.DoesNotExist:
+                Applicant.objects.create(user=instance, **applicant_data)
 
         return instance
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True, min_length=8)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_password_confirm = serializers.CharField(write_only=True, min_length=8)
+
+    def validate(self, attrs):
+        user = self.context['request'].user
+
+        old_password = attrs.get('old_password')
+        new_password = attrs.get('new_password')
+        new_password_confirm = attrs.get('new_password_confirm')
+
+        if not user.check_password(old_password):
+            raise serializers.ValidationError({'old_password': 'Неверный текущий пароль'})
+
+        if new_password != new_password_confirm:
+            raise serializers.ValidationError({'new_password_confirm': 'Пароли не совпадают'})
+
+        if old_password == new_password:
+            raise serializers.ValidationError({'new_password': 'Новый пароль должен отличаться от текущего'})
+
+        validate_password(new_password, user=user)
+        return attrs
     
 # serializers.py
 class ChatSerializer(serializers.ModelSerializer):
@@ -532,10 +633,10 @@ class ChatSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source='company.name', read_only=True)
     applicant_name = serializers.CharField(source='applicant.__str__', read_only=True)
     
-    # Информация о вакансии
+    # РРЅС„РѕСЂРјР°С†РёСЏ Рѕ РІР°РєР°РЅСЃРёРё
     vacancy_info = serializers.SerializerMethodField()
     
-    # Информация о соискателе
+    # РРЅС„РѕСЂРјР°С†РёСЏ Рѕ СЃРѕРёСЃРєР°С‚РµР»Рµ
     applicant_info = serializers.SerializerMethodField()
     
     # Кто может писать в чат (сотрудники компании)
@@ -660,6 +761,7 @@ class SendMessageSerializer(serializers.ModelSerializer):
 
 class VacancyShortSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source='company.name', read_only=True)
+    has_applied = serializers.SerializerMethodField()
 
     class Meta:
         model = Vacancy
@@ -670,7 +772,20 @@ class VacancyShortSerializer(serializers.ModelSerializer):
             'salary_max',
             'city',
             'company_name',
+            'has_applied',
         )
+
+    def get_has_applied(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+
+        try:
+            applicant = request.user.applicant
+        except Applicant.DoesNotExist:
+            return False
+
+        return Response.objects.filter(applicants=applicant, vacancy=obj).exists()
 
 class VacancyVideoFeedSerializer(serializers.ModelSerializer):
     vacancy = VacancyShortSerializer(read_only=True)
@@ -725,26 +840,17 @@ class VacancyVideoAdminSerializer(serializers.ModelSerializer):
         read_only_fields = ('is_active',)
 
     def create(self, validated_data):
-        request = self.context['request']
-        employee = request.user.employee
-
-        instance = VacancyVideo.objects.create(
-            uploaded_by=employee,
-            company=employee.company,
-            **validated_data
-        )
+        # uploaded_by/company приходят из viewset.perform_create(serializer.save(...))
+        # поэтому тут просто создаём модель без дублей kwargs.
+        instance = VacancyVideo.objects.create(**validated_data)
 
         errors = validate_video(
             instance.video.path,
             instance.video.size
         )
 
-        if not errors:
-            instance.is_active = True
-            instance.save()
-        else:
-            instance.is_active = False
-            instance.save()
+        instance.is_active = (not errors)
+        instance.save(update_fields=['is_active'])
 
         return instance
 
@@ -808,19 +914,15 @@ class ContentManagerVideoSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context['request']
-        employee = request.user.employee
 
         # video файл берётся из request.FILES (MultiPartParser)
         video_file = request.FILES.get("video")
         if not video_file:
             raise serializers.ValidationError({"video": "Файл видео обязателен"})
 
-        instance = VacancyVideo.objects.create(
-            uploaded_by=employee,
-            company=employee.company,
-            video=video_file,
-            **validated_data
-        )
+        # uploaded_by/company приходят из viewset.perform_create(serializer.save(...))
+        # тут добавляем только сам файл.
+        instance = VacancyVideo.objects.create(video=video_file, **validated_data)
 
         # если хочешь модерацию — оставь False и убери автоактивацию
         # но я оставляю твою логику: валидное видео -> active True
@@ -830,7 +932,7 @@ class ContentManagerVideoSerializer(serializers.ModelSerializer):
             errors = ["validate_error"]
 
         instance.is_active = (not errors)
-        instance.save()
+        instance.save(update_fields=['is_active'])
         return instance
 
 
@@ -860,3 +962,104 @@ class ContentManagerVideoListSerializer(serializers.ModelSerializer):
 
     def get_views_count(self, obj):
         return obj.vacancyvideoview_set.count()
+    
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(min_length=6, max_length=6)
+    new_password = serializers.CharField(min_length=8)
+
+    def validate(self, attrs):
+        email = attrs["email"].strip().lower()
+        code = attrs["code"].strip()
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"email": "Пользователь не найден"})
+
+        prc = (PasswordResetCode.objects
+               .filter(user=user, code=code, is_used=False, expires_at__gt=timezone.now())
+               .order_by("-created_at")
+               .first())
+
+        if not prc:
+            raise serializers.ValidationError({"code": "Неверный или просроченный код"})
+
+        attrs["user"] = user
+        attrs["reset_obj"] = prc
+        return attrs
+
+
+# -------------------- Company staff management --------------------
+
+class CompanyEmployeeCreateSerializer(serializers.Serializer):
+    """Создание HR-агента/контент-менеджера владельцем компании."""
+
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, min_length=8)
+    first_name = serializers.CharField(max_length=80)
+    last_name = serializers.CharField(max_length=80)
+    role = serializers.ChoiceField(choices=[('hr', 'HR агент'), ('content_manager', 'Контент-менеджер')])
+
+    def create(self, validated_data):
+        request = self.context['request']
+        owner = request.user
+        if owner.user_type != 'company':
+            raise serializers.ValidationError('Только владелец компании может создавать сотрудников')
+
+        company = owner.company
+
+        user = User.objects.create_user(
+            username=validated_data['email'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            phone='',
+            user_type='staff',
+        )
+
+        employee = Employee.objects.create(
+            user=user,
+            company=company,
+            role=validated_data['role'],
+        )
+        return employee
+
+
+class CompanyEmployeeListSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
+
+    class Meta:
+        model = Employee
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'company', 'is_active')
+
+
+class CompanyEmployeeUpdateSerializer(serializers.Serializer):
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
+    role = serializers.ChoiceField(required=False, choices=[('hr', 'HR агент'), ('content_manager', 'Контент-менеджер')])
+    is_active = serializers.BooleanField(required=False)
+
+    def update(self, instance, validated_data):
+        # instance: Employee
+        user = instance.user
+        if 'first_name' in validated_data:
+            user.first_name = validated_data['first_name']
+        if 'last_name' in validated_data:
+            user.last_name = validated_data['last_name']
+        if 'is_active' in validated_data:
+            user.is_active = validated_data['is_active']
+        user.save(update_fields=['first_name', 'last_name', 'is_active'])
+
+        if 'role' in validated_data:
+            instance.role = validated_data['role']
+            instance.save(update_fields=['role'])
+        return instance

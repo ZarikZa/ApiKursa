@@ -2,6 +2,7 @@
 from decouple import Config, Csv, RepositoryEnv
 from datetime import timedelta
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -31,10 +32,11 @@ INSTALLED_APPS = [
 ]
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60), 
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    
-    'ROTATE_REFRESH_TOKENS': True,                  
-    'BLACKLIST_AFTER_ROTATION': True,               
+   'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
+
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),   
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,        
     'UPDATE_LAST_LOGIN': True,                      
     
     'ALGORITHM': 'HS256',
@@ -42,7 +44,7 @@ SIMPLE_JWT = {
     'VERIFYING_KEY': None,
     'AUDIENCE': None,
     'ISSUER': None,
-    
+
     'AUTH_HEADER_TYPES': ('Bearer',),  
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
     'USER_ID_FIELD': 'id',
@@ -74,6 +76,7 @@ REST_FRAMEWORK = {
 }
 
 MIDDLEWARE = [
+    # Debug middleware: покажет в консоли, дошёл ли большой multipart POST до Django
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -109,12 +112,11 @@ WSGI_APPLICATION = 'apihh_master.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        #'HOST': config('DB_HOST', default='127.0.0.1'),
-        'HOST': config('DB_HOST', default='postgres1'),
-        'PORT': config('DB_PORT', default='5432', cast=int),
+        'ENGINE': config('DB_ENGINE', default='django.bd.backends.mysql'),
+        'HOST': config('DB_HOST', default=''),
+        'PORT': config('DB_PORT', default='3306', cast=int),
         'NAME': config('DB_NAME', default='kursa2'),
-        'USER': config('DB_USER', default='postgres'),
+        'USER': config('DB_USER', default=''),
         'PASSWORD': config('DB_PASSWORD', default=''),
     }
 }
@@ -144,3 +146,48 @@ STATIC_URL = 'static/'
 # Путь к медиафайлам
 MEDIA_URL = '/vacancy_videos/'  # путь, который будет в ссылках на видео
 MEDIA_ROOT = BASE_DIR / 'vacancy_videos'  # фактическая папка на сервере
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.mail.ru')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='')
+SERVER_EMAIL = config('SERVER_EMAIL', default='')
+EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=30, cast=int)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
+
+# =====================
+# Upload limits (videos)
+# =====================
+# По умолчанию Django ограничивает размер входящих данных в памяти (~2.5MB).
+# Для multipart-видео это часто приводит к обрыву соединения на клиенте (socket closed/timeout)
+# ещё во время отправки тела запроса.
+# Подними лимиты под свои нужды (ниже пример на 100MB).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024
+
+# ⚠️ Windows + большие видео:
+# Стабильнее сразу писать upload в temp-файл (не держать в памяти/не переключаться посередине).
+FILE_UPLOAD_MAX_MEMORY_SIZE = 0
+
+# Явно задаём папку для временных файлов загрузки, чтобы не зависеть от системного TEMP.
+FILE_UPLOAD_TEMP_DIR = r"C:\temp\uploads"
+os.makedirs(FILE_UPLOAD_TEMP_DIR, exist_ok=True)
+
+# Форсим temp-upload handler
+FILE_UPLOAD_HANDLERS = [
+    'apihh_main.upload_debug.DebugUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "uploadwire": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+    },
+}
